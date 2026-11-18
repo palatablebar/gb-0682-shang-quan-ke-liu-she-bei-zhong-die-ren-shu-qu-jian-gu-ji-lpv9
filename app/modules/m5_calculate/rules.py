@@ -1,6 +1,8 @@
+from app import rulebook
 from app.errors import DomainError
 
-def bounds(model):
+def bounds(model, rule_version=None):
+    version=rulebook.uniform([model.get('rule_version')],rule_version,allow_missing=True)
     zones=model['zones'];keys=sorted(zones);pairs=model['pairs'];values=[zones[k] for k in keys]
     if len(keys)==1:return values[0],values[0],0,0
     if len(keys)==2:
@@ -14,13 +16,17 @@ def bounds(model):
     return base+low,base+high,low,high
 
 def apply(state):
+    version=rulebook.resolve(state.get('rule_version'))
     results=[];bad=set()
     for i,item in enumerate(state['models']):
         try:
-            low,high,tlo,thi=bounds(item['model']);results.append({'id':item['bucket'],'line':item['line'],'lower':low,'upper':high,'width':high-low,'triple_lower':tlo,'triple_upper':thi,'code':'EXACT' if low==high else 'INTERVAL'})
+            low,high,tlo,thi=bounds(item['model'],version);results.append({'id':item['bucket'],'line':item['line'],'lower':low,'upper':high,'width':high-low,'triple_lower':tlo,'triple_upper':thi,'code':'EXACT' if low==high else 'INTERVAL','rule_version':version})
         except DomainError as e:
             bad.add(item['bucket'])
             for r in state['rows']:
-                if r['bucket']==item['bucket']:state['quarantine'].append({'line':r['_line'],'id':r['id'],'code':e.code,'raw':r['_raw']})
+                if r['bucket']==item['bucket']:state['quarantine'].append({'line':r['_line'],'id':r['id'],'code':e.code,'raw':r['_raw'],'rule_version':version})
     state['rows']=[r for r in state['rows'] if r['bucket'] not in bad]
-    state['calculations']=results;state['business']={'total':sum(r['lower'] for r in results),'upper_total':sum(r['upper'] for r in results),'buckets':len(results),'unit':'客次'};return state
+    state['calculations']=results
+    state['business']={'total':sum(r['lower'] for r in results),'upper_total':sum(r['upper'] for r in results),
+        'buckets':len(results),'unit':'客次','rule_version':version,'bounds':rulebook.profile(version).bounds_label}
+    return state

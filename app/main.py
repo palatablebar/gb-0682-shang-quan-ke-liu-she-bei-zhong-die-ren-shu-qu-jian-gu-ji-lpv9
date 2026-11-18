@@ -1,9 +1,9 @@
-import importlib,os
+import importlib,base64
 from flask import Flask,jsonify,request,redirect,Response
 from app.config import MODULES
 from app.errors import DomainError
 from app.workflow import run,load
-from app import store
+from app import rulebook,store
 from app.web import payload
 from app.modules.m7_archive.export_out import bundle
 
@@ -17,14 +17,35 @@ def create_app():
     @app.get('/')
     def index():return redirect('/'+MODULES[0][0])
     @app.get('/healthz')
-    def health():return jsonify(status='ok')
+    def health():return jsonify(status='ok',rule_version=rulebook.resolve())
+    @app.get('/api/rules')
+    def rules():return jsonify(rulebook.catalogue())
+    @app.get('/api/schema')
+    def schema():return jsonify(state=store.schema_state())
     @app.post('/api/runs')
     def submit():
-        content,params=payload();state=run(content,params);return jsonify(store.save(state['run_id'],state))
+        content,params,version=payload();state=run(content,params,7,version)
+        return jsonify(store.save(state['run_id'],state))
     @app.get('/api/runs')
     def list_runs():return jsonify(store.history())
     @app.get('/api/runs/<run_id>')
     def get_run(run_id):return jsonify(store.get(run_id))
+    @app.post('/api/runs/restate')
+    def restate():
+        data=request.get_json(silent=True) or {}
+        old=store.get(data.get('run_id'))
+        version=rulebook.resolve(data.get('rule_version'))
+        content=base64.b64decode(old.get('source_b64') or '')
+        if not content:raise DomainError('SOURCE','该批次未保存原始观测，无法重算')
+        params=(old.get('manifest') or {}).get('parameters') or {}
+        state=run(content,params,7,version)
+        return jsonify(store.save(state['run_id'],state))
+    @app.get('/api/runs/<run_id>/parallel')
+    def parallel(run_id):return jsonify(store.restated_source(run_id))
+    @app.post('/api/runs/combined')
+    def combined():
+        data=request.get_json(silent=True) or {}
+        return jsonify(store.combined(data.get('run_ids')))
     @app.post('/api/runs/<run_id>/review')
     def review(run_id):
         data=request.get_json(silent=True) or {}
@@ -36,8 +57,9 @@ def create_app():
         if not state.get('reconcile',{}).get('balanced'):raise DomainError('UNBALANCED','对账未平')
         return Response(bundle(state),mimetype='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename=evidence.csv'})
     with app.app_context():
+        store.migrate()
         if not store.history():
-            state=run(load('dirty.csv'),{});store.save(state['run_id'],state)
+            state=run(load('dirty.csv'),{},7);store.save(state['run_id'],state)
     return app
 
 app=create_app()

@@ -1,7 +1,9 @@
 from collections import defaultdict
+from app import rulebook
 from app.errors import DomainError
 
-def model(observations):
+def model(observations, rule_version=None):
+    version=rulebook.uniform([r.get('rule_version') for r in observations],rule_version,allow_missing=True)
     zones={r['left']:r['count'] for r in observations if r['kind']=='zone'}
     pairs={tuple(sorted([r['left'],r['right']])):r['count'] for r in observations if r['kind']=='pair'}
     if not 1<=len(zones)<=3 or not set(zones)<={'A','B','C'}:raise DomainError('CONSTRAINT','区域必须为A、B、C的子集')
@@ -13,17 +15,19 @@ def model(observations):
         raise DomainError('CONSTRAINT','三方交集必须对应ABC三个区域')
     triples=[r['count'] for r in triple_rows]
     if len(triples)>1:raise DomainError('CONSTRAINT','三方交集记录重复')
-    return {'zones':zones,'pairs':{'|'.join(k):v for k,v in pairs.items()},'triple':triples[0] if triples else None}
+    return {'zones':zones,'pairs':{'|'.join(k):v for k,v in pairs.items()},'triple':triples[0] if triples else None,
+        'rule_version':version}
 
 def apply(state):
+    version=rulebook.resolve(state.get('rule_version'))
     grouped=defaultdict(list)
     for r in state['observations']:grouped[r['bucket']].append(r)
     result=[];bad_buckets=set()
     for bucket,rows in sorted(grouped.items()):
         try:
-            result.append({'bucket':bucket,'model':model(rows),'line':min(r['_line'] for r in rows)})
+            result.append({'bucket':bucket,'model':model(rows,version),'line':min(r['_line'] for r in rows),'rule_version':version})
         except DomainError as e:
             bad_buckets.add(bucket)
             for r in state['rows']:
-                if r['bucket']==bucket:state['quarantine'].append({'line':r['_line'],'id':r['id'],'code':e.code,'raw':r['_raw']})
+                if r['bucket']==bucket:state['quarantine'].append({'line':r['_line'],'id':r['id'],'code':e.code,'raw':r['_raw'],'rule_version':version})
     state['rows']=[r for r in state['rows'] if r['bucket'] not in bad_buckets];state['models']=result;return state

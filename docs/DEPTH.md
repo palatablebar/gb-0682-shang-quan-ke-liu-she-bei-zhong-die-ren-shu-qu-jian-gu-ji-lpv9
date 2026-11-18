@@ -39,3 +39,16 @@
 ## 已知不覆盖
 
 不做多租户权限和外部服务联调。行业规则以项目数据字典为准。文件上限2MB，逐行解析后在上限内完成分组计算。
+
+## 规则版本与证据保真
+
+| TRAP | 现象 | 朴素实现 | 处理 | 处理位置 | 测试 |
+|---|---|---|---|---|---|
+| TRAP-27 | 规则升级后旧批次被新语义重算 | 页面按当前代码重放历史 | 归档页只读回放已签发正文；其余页面按批次自身规则版本、原样字节重跑 | `app/web.py`、`app/store.py` | `tests/test_evidence_fidelity.py::test_legacy_signed_bytes_reproduced` |
+| TRAP-28 | 同版仅备注不同被当成矛盾 | 整行比较 | v2 只比较业务字段；v1 保留整行语义 | `app/modules/m2_mapping/rules.py`、`app/rulebook.py` | `tests/test_rule_versions.py::test_versions_diverge_on_same_source` |
+| TRAP-29 | 跨版本数据拼成日汇总 | 直接相加各批次 | 汇总与导出前强制同版本，冲突返回 `RULE_MIX` | `app/modules/m6_reconcile/compare.py`、`app/store.py` | `tests/test_rule_versions.py::test_cross_version_combined_rejected` |
+| TRAP-30 | 迁移失败丢旧证据 | 先删列重建表 | 独立事务备份 `runs_backup_v2`；加法回填；失败整体回滚并保留旧结构 | `app/store.py` | `tests/test_rule_versions.py::test_migration_failure_preserves_old_evidence` |
+| TRAP-31 | 规则切换丢低版本记录 | 只保留最高版 | `superseded` 台账保留来源行与原值 | `app/modules/m3_versions/rules.py` | `tests/test_rule_versions.py::test_superseded_records_not_lost` |
+| TRAP-32 | 同源同规则重跑新增重复批次 | 每次生成新批次 | 幂等键含输入、参数、规则版本；仅移动最新指针 | `app/manifest.py`、`app/store.py` | `tests/test_rule_versions.py::test_same_source_same_rule_no_duplicate` |
+
+规则版本口径：`/api/rules` 返回登记表与“并列重述”策略；`POST /api/runs/restate` 用旧批次原样字节生成新规则版本批次；`GET /api/runs/<id>/parallel` 列出同源并列批次；`POST /api/runs/combined` 只接受同版本批次。
